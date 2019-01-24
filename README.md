@@ -15,3 +15,6 @@ Just an UDP server that accepts data from gofi_client and writes data to an sqli
 ## todo
 * Add a web UI to view all indexed files and sort on size and search
 * Figure out concurrency
+
+## links
+GoFi client: https://github.com/dvwallin/gofi_client
