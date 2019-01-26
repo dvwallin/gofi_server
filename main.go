@@ -1,15 +1,27 @@
 package main
 
 import (
-	"bytes"
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"io"
+	"io/ioutil"
 	"log"
 	"net"
 	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
 
 	_ "github.com/mattn/go-sqlite3"
+	"gopkg.in/cheggaaa/pb.v1"
+)
+
+const (
+	BUFFERSIZE         = 2048
+	SERVER_PORT        = 1985
+	GOFI_DATABASE_NAME = "gofi.db"
+	GOFI_TMP_DIR       = ".gofi_tmp/"
 )
 
 var (
@@ -34,11 +46,14 @@ type (
 )
 
 func init() {
-	db, err = sql.Open("sqlite3", "./gofi.db")
+
+	// Connect to the database
+	db, err = sql.Open("sqlite3", fmt.Sprintf("./%s", GOFI_DATABASE_NAME))
 	if err != nil {
 		log.Println(err)
 	}
 
+	// Make sure the correct scheme exists
 	sqlStmt := `
 		CREATE TABLE IF NOT EXISTS files 
 			(	id integer NOT NULL primary key, 
@@ -56,64 +71,137 @@ func init() {
 		log.Printf("%q: %s\n", err, sqlStmt)
 		return
 	}
-}
 
-/* A Simple function to verify error */
-func CheckError(err error) {
-	if err != nil {
-		fmt.Println("Error: ", err)
-		os.Exit(0)
-	}
+	// Create the GOFI_TMP_DIR in case it does not exist already
+	newpath := filepath.Join(".", GOFI_TMP_DIR)
+	os.MkdirAll(newpath, os.ModePerm)
 }
 
 func main() {
-	ServerAddr, err := net.ResolveUDPAddr("udp", ":1985")
-	CheckError(err)
-
-	ServerConn, err := net.ListenUDP("udp", ServerAddr)
-	CheckError(err)
-	defer ServerConn.Close()
-
-	buf := make([]byte, 1024)
-
-	var file File
-
+	server, err := net.Listen("tcp", fmt.Sprintf(":%d", SERVER_PORT))
+	if err != nil {
+		log.Println("error listetning: ", err)
+		os.Exit(1)
+	}
+	defer server.Close()
+	log.Printf("Server started on :%d! Waiting for connections...\n", SERVER_PORT)
 	for {
-		n, _, err := ServerConn.ReadFromUDP(buf)
-
-		r := bytes.NewReader(buf[0:n])
-
-		decoder := json.NewDecoder(r)
-		err = decoder.Decode(&file)
-
+		connection, err := server.Accept()
 		if err != nil {
-			log.Println(err)
+			log.Println("error: ", err)
+			os.Exit(1)
+		}
+		log.Println("client connected from", connection.RemoteAddr().String())
+		filename, err := getFile(connection)
+		if err != nil {
+			log.Println("error getting file", err)
+		}
+		err = addFile(filename)
+		if err != nil {
+			log.Println("error adding file", filename, err)
+		} else {
+			log.Println("files successfully added ...")
 		}
 
-		fileCount++
-		addFile(file)
-
-		if err != nil {
-			fmt.Println("Error: ", err)
+		if err == nil {
+			log.Println("removing temporary file ...")
+			err = deleteTemporaryFile(filepath.Join(GOFI_TMP_DIR, filename))
+			if err != nil {
+				log.Println("error deleting temporary file", err)
+			}
 		}
-		fmt.Printf("\rRecieved %d files", fileCount)
+		log.Println("transaction ended ...")
 	}
 }
 
-func addFile(file File) (bool, error) {
-	stmt, err = db.Prepare("INSERT OR IGNORE INTO files(name, path, size, isdir, machine, ip) values(?,?,?,?,?,?)")
+func getFile(connection net.Conn) (filename string, err error) {
+	bufferFileName := make([]byte, 64)
+	bufferFileSize := make([]byte, 10)
 
+	connection.Read(bufferFileSize)
+	fileSize, _ := strconv.ParseInt(strings.Trim(string(bufferFileSize), ":"), 10, 64)
+
+	connection.Read(bufferFileName)
+	filename = strings.Trim(string(bufferFileName), ":")
+
+	newFile, err := os.Create(filepath.Join(GOFI_TMP_DIR, filename))
 	if err != nil {
-		return false, err
+		return filename, err
 	}
 
-	_, err = stmt.Exec(file.Name, file.Path, file.Size, file.IsDir, file.Machine, file.IP)
+	defer newFile.Close()
+	var receivedBytes int64
 
+	for {
+		if (fileSize - receivedBytes) < BUFFERSIZE {
+			io.CopyN(newFile, connection, (fileSize - receivedBytes))
+			connection.Read(make([]byte, (receivedBytes+BUFFERSIZE)-fileSize))
+			break
+		}
+		io.CopyN(newFile, connection, BUFFERSIZE)
+		receivedBytes += BUFFERSIZE
+	}
+	log.Println("successfully received", filename)
+	return filename, nil
+}
+
+func addFile(filename string) (err error) {
+
+	log.Println("initiating saving files to database ...")
+
+	var files Files
+
+	file, err := os.Open(filepath.Join(GOFI_TMP_DIR, filename))
 	if err != nil {
-		return false, err
+		return err
 	}
 
-	return true, nil
+	data, err := ioutil.ReadAll(file)
+	if err != nil {
+		return err
+	}
+
+	err = json.Unmarshal(data, &files)
+	if err != nil {
+		return err
+	}
+
+	count := len(files)
+
+	log.Println("found", count, "files in", filename)
+
+	bar := pb.StartNew(count)
+
+	tx, err := db.Begin()
+	if err != nil {
+		return err
+	}
+
+	for _, v := range files {
+		bar.Increment()
+
+		stmt, err = tx.Prepare("INSERT OR IGNORE INTO files(name, path, size, isdir, machine, ip) values(?,?,?,?,?,?)")
+
+		if err != nil {
+			return err
+		}
+
+		_, err = stmt.Exec(v.Name, v.Path, v.Size, v.IsDir, v.Machine, v.IP)
+
+		if err != nil {
+			return err
+		}
+	}
+	tx.Commit()
+	bar.FinishPrint("done ...")
+
+	return nil
+
+}
+
+func deleteTemporaryFile(filename string) (err error) {
+	err = os.Remove(filename)
+	return
 }
 
 // func ListFiles(w http.ResponseWriter, req *http.Request) {
