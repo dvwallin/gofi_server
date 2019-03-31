@@ -2,10 +2,8 @@ package main
 
 import (
 	"database/sql"
-	"encoding/json"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net"
 	"os"
@@ -34,13 +32,18 @@ var (
 
 type (
 	File struct {
-		ID      string `json:"id,omitempty"`
-		Name    string `json:"name,omitempty"`
-		Path    string `json:"path,omitempty"`
-		Size    int64  `json:"size"`
-		IsDir   int    `json:"isdir"`
-		Machine string `json:"machine"`
-		IP      string `json:"ip"`
+		ID               string `json:"id,omitempty"`
+		Name             string `json:"name,omitempty"`
+		Path             string `json:"path,omitempty"`
+		Size             int64  `json:"size"`
+		IsDir            int    `json:"isdir"`
+		Machine          string `json:"machine"`
+		IP               string `json:"ip"`
+		OnExternalSource int    `json:"on_external_source"`
+		ExternalName     string `json:"external_name"`
+		FileType         string `json:"file_type"`
+		FileMIME         string `json:"file_mime"`
+		SHA512           string `json:"sha512"` // TODO : ADD SHA512 HASH FOR EACH FILE!!!!
 	}
 	Files []File
 )
@@ -62,8 +65,12 @@ func init() {
 				size integer NOT NULL, 
 				isdir integer NOT NULL, 
 				machine text NOT NULL, 
-				ip text NOT NULL, 
-			CONSTRAINT path_unique UNIQUE (path, machine, ip)
+				ip text NOT NULL,
+				onexternalsource integer NOT NULL,
+				externalname text NOT NULL,
+				filetype text NOT NULL,
+				filemime text NOT NULL,
+			CONSTRAINT path_unique UNIQUE (path, machine, ip, onexternalsource, externalname)
 			);
 	`
 	_, err = db.Exec(sqlStmt)
@@ -142,6 +149,7 @@ func getFile(connection net.Conn) (filename string, err error) {
 		receivedBytes += BUFFERSIZE
 	}
 	log.Println("successfully received", filename)
+	log.Println("file is", ByteCountSI(receivedBytes), "bytes")
 	return filename, nil
 }
 
@@ -151,17 +159,25 @@ func addFile(filename string) (err error) {
 
 	var files Files
 
-	file, err := os.Open(filepath.Join(GOFI_TMP_DIR, filename))
+	tempDB, err := sql.Open("sqlite3", filename)
 	if err != nil {
 		return err
 	}
 
-	data, err := ioutil.ReadAll(file)
+	rows, err := tempDB.Query("select name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime from files")
 	if err != nil {
 		return err
 	}
-
-	err = json.Unmarshal(data, &files)
+	defer rows.Close()
+	for rows.Next() {
+		var file File
+		err = rows.Scan(&file.Name, &file.Path, &file.Size, &file.IsDir, &file.Machine, &file.IP, &file.OnExternalSource, &file.ExternalName, &file.FileType, &file.FileMIME)
+		if err != nil {
+			return err
+		}
+		files = append(files, file)
+	}
+	err = rows.Err()
 	if err != nil {
 		return err
 	}
@@ -180,13 +196,13 @@ func addFile(filename string) (err error) {
 	for _, v := range files {
 		bar.Increment()
 
-		stmt, err = tx.Prepare("INSERT OR IGNORE INTO files(name, path, size, isdir, machine, ip) values(?,?,?,?,?,?)")
+		stmt, err = tx.Prepare("INSERT OR IGNORE INTO files(name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime) values(?,?,?,?,?,?,?,?,?,?)")
 
 		if err != nil {
 			return err
 		}
 
-		_, err = stmt.Exec(v.Name, v.Path, v.Size, v.IsDir, v.Machine, v.IP)
+		_, err = stmt.Exec(v.Name, v.Path, v.Size, v.IsDir, v.Machine, v.IP, v.OnExternalSource, v.ExternalName, v.FileType, v.FileMIME)
 
 		if err != nil {
 			return err
@@ -227,3 +243,17 @@ func deleteTemporaryFile(filename string) (err error) {
 
 // 	json.NewEncoder(w).Encode(&files)
 // }
+
+func ByteCountSI(b int64) string {
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB",
+		float64(b)/float64(div), "kMGTPE"[exp])
+}
