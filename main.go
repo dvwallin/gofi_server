@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -19,7 +18,6 @@ const (
 	BUFFERSIZE         = 2048
 	SERVER_PORT        = 1985
 	GOFI_DATABASE_NAME = "gofi.db"
-	GOFI_TMP_DIR       = ".gofi_tmp/"
 )
 
 var (
@@ -79,9 +77,6 @@ func init() {
 		return
 	}
 
-	// Create the GOFI_TMP_DIR in case it does not exist already
-	newpath := filepath.Join(".", GOFI_TMP_DIR)
-	os.MkdirAll(newpath, os.ModePerm)
 }
 
 func main() {
@@ -110,13 +105,13 @@ func main() {
 			log.Println("files successfully added ...")
 		}
 
-		if err == nil {
-			log.Println("removing temporary file ...")
-			err = deleteTemporaryFile(filepath.Join(GOFI_TMP_DIR, filename))
-			if err != nil {
-				log.Println("error deleting temporary file", err)
-			}
-		}
+		// if err == nil {
+		// 	log.Println("removing temporary file ...")
+		// 	err = deleteTemporaryFile(filepath.Join(GOFI_TMP_DIR, filename))
+		// 	if err != nil {
+		// 		log.Println("error deleting temporary file", err)
+		// 	}
+		// }
 		log.Println("transaction ended ...")
 	}
 }
@@ -131,7 +126,7 @@ func getFile(connection net.Conn) (filename string, err error) {
 	connection.Read(bufferFileName)
 	filename = strings.Trim(string(bufferFileName), ":")
 
-	newFile, err := os.Create(filepath.Join(GOFI_TMP_DIR, filename))
+	newFile, err := os.Create(filename)
 	if err != nil {
 		return filename, err
 	}
@@ -210,6 +205,11 @@ func addFile(filename string) (err error) {
 	}
 	tx.Commit()
 	bar.FinishPrint("done ...")
+
+	err = deleteTemporaryFile(filename)
+	if err != nil {
+		return err
+	}
 
 	return nil
 
