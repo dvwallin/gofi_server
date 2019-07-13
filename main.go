@@ -1,16 +1,23 @@
 package main
 
 import (
+	"context"
 	"database/sql"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"strconv"
 	"strings"
+	"time"
 
+	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 	"gopkg.in/cheggaaa/pb.v1"
 )
 
@@ -22,6 +29,7 @@ const (
 
 var (
 	db        *sql.DB
+	mdb       *mongo.Client
 	err       error
 	stmt      *sql.Stmt
 	res       sql.Result
@@ -54,28 +62,8 @@ func init() {
 		log.Println(err)
 	}
 
-	// Make sure the correct scheme exists
-	sqlStmt := `
-		CREATE TABLE IF NOT EXISTS files 
-			(	id integer NOT NULL primary key, 
-				name text NOT NULL, 
-				path text NOT NULL, 
-				size integer NOT NULL, 
-				isdir integer NOT NULL, 
-				machine text NOT NULL, 
-				ip text NOT NULL,
-				onexternalsource integer NOT NULL,
-				externalname text NOT NULL,
-				filetype text NOT NULL,
-				filemime text NOT NULL,
-			CONSTRAINT path_unique UNIQUE (path, machine, ip, onexternalsource, externalname)
-			);
-	`
-	_, err = db.Exec(sqlStmt)
-	if err != nil {
-		log.Printf("%q: %s\n", err, sqlStmt)
-		return
-	}
+	ctx, _ := context.WithTimeout(context.Background(), 10*time.Second)
+	mdb, err = mongo.Connect(ctx, options.Client().ApplyURI("mongodb://localhost:27017"))
 
 }
 
@@ -86,6 +74,7 @@ func main() {
 		os.Exit(1)
 	}
 	defer server.Close()
+	go www()
 	log.Printf("Server started on :%d! Waiting for connections...\n", SERVER_PORT)
 	for {
 		connection, err := server.Accept()
@@ -105,17 +94,23 @@ func main() {
 			log.Println("files successfully added ...")
 		}
 
-		// if err == nil {
-		// 	log.Println("removing temporary file ...")
-		// 	err = deleteTemporaryFile(filepath.Join(GOFI_TMP_DIR, filename))
-		// 	if err != nil {
-		// 		log.Println("error deleting temporary file", err)
-		// 	}
-		// }
 		log.Println("transaction ended ...")
+
 	}
 }
 
+func www() {
+	r := mux.NewRouter()
+	r.HandleFunc("/", ListFiles)
+	r.HandleFunc("/test", Test)
+	log.Println("WWW running on port 1180 ...")
+	http.ListenAndServe(":1180", r)
+}
+
+func Test(w http.ResponseWriter, req *http.Request) {
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintf(w, "HEJ!")
+}
 func getFile(connection net.Conn) (filename string, err error) {
 	bufferFileName := make([]byte, 64)
 	bufferFileSize := make([]byte, 10)
@@ -220,29 +215,29 @@ func deleteTemporaryFile(filename string) (err error) {
 	return
 }
 
-// func ListFiles(w http.ResponseWriter, req *http.Request) {
-// 	var files Files
+func ListFiles(w http.ResponseWriter, req *http.Request) {
+	var files Files
 
-// 	rows, err := db.Query("select id, name, path, size, isdir, machine, ip from files")
-// 	if err != nil {
-// 		log.Println("ERROR", err)
-// 	}
-// 	defer rows.Close()
-// 	for rows.Next() {
-// 		var file File
-// 		err = rows.Scan(&file.ID, &file.Name, &file.Path, &file.Size, &file.IsDir, &file.Machine, &file.IP)
-// 		if err != nil {
-// 			log.Println(err)
-// 		}
-// 		files = append(files, file)
-// 	}
-// 	err = rows.Err()
-// 	if err != nil {
-// 		log.Println(err)
-// 	}
+	rows, err := db.Query("select id, name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime from files")
+	if err != nil {
+		log.Println("ERROR", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var file File
+		err = rows.Scan(&file.ID, &file.Name, &file.Path, &file.Size, &file.IsDir, &file.Machine, &file.IP, &file.OnExternalSource, &file.ExternalName, &file.FileType, &file.FileMIME)
+		if err != nil {
+			log.Println(err)
+		}
+		files = append(files, file)
+	}
+	err = rows.Err()
+	if err != nil {
+		log.Println(err)
+	}
 
-// 	json.NewEncoder(w).Encode(&files)
-// }
+	json.NewEncoder(w).Encode(&files)
+}
 
 func ByteCountSI(b int64) string {
 	const unit = 1000
