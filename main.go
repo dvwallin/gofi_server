@@ -54,7 +54,6 @@ func init() {
 		log.Println(err)
 	}
 
-	// Make sure the correct scheme exists
 	sqlStmt := `
 		CREATE TABLE IF NOT EXISTS files 
 			(	id integer NOT NULL primary key, 
