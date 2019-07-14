@@ -41,7 +41,8 @@ type (
 		ExternalName     string `json:"external_name"`
 		FileType         string `json:"file_type"`
 		FileMIME         string `json:"file_mime"`
-		SHA512           string `json:"sha512"` // TODO : ADD SHA512 HASH FOR EACH FILE!!!!
+		FileHash         string `json:"filehash"`
+		Modified         string `json:"modified"`
 	}
 	Files []File
 )
@@ -67,7 +68,9 @@ func init() {
 				externalname text NOT NULL,
 				filetype text NOT NULL,
 				filemime text NOT NULL,
-			CONSTRAINT path_unique UNIQUE (path, machine, ip, onexternalsource, externalname)
+        filehash text NOT NULL,
+        modified text NOT NULL,
+			CONSTRAINT path_unique UNIQUE (path, machine, ip, onexternalsource, externalname, filehash)
 			);
 	`
 	_, err = db.Exec(sqlStmt)
@@ -158,14 +161,14 @@ func addFile(filename string) (err error) {
 		return err
 	}
 
-	rows, err := tempDB.Query("select name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime from files")
+	rows, err := tempDB.Query("select name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime, filehash, modified from files")
 	if err != nil {
 		return err
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var file File
-		err = rows.Scan(&file.Name, &file.Path, &file.Size, &file.IsDir, &file.Machine, &file.IP, &file.OnExternalSource, &file.ExternalName, &file.FileType, &file.FileMIME)
+		err = rows.Scan(&file.Name, &file.Path, &file.Size, &file.IsDir, &file.Machine, &file.IP, &file.OnExternalSource, &file.ExternalName, &file.FileType, &file.FileMIME, &file.FileHash, &file.Modified)
 		if err != nil {
 			return err
 		}
@@ -190,13 +193,13 @@ func addFile(filename string) (err error) {
 	for _, v := range files {
 		bar.Increment()
 
-		stmt, err = tx.Prepare("INSERT OR IGNORE INTO files(name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime) values(?,?,?,?,?,?,?,?,?,?)")
+		stmt, err = tx.Prepare("INSERT OR IGNORE INTO files(name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime, filehash, modified) values(?,?,?,?,?,?,?,?,?,?,?,?)")
 
 		if err != nil {
 			return err
 		}
 
-		_, err = stmt.Exec(v.Name, v.Path, v.Size, v.IsDir, v.Machine, v.IP, v.OnExternalSource, v.ExternalName, v.FileType, v.FileMIME)
+		_, err = stmt.Exec(v.Name, v.Path, v.Size, v.IsDir, v.Machine, v.IP, v.OnExternalSource, v.ExternalName, v.FileType, v.FileMIME, v.FileHash, v.Modified)
 
 		if err != nil {
 			return err
