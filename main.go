@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/davecgh/go-spew/spew"
 	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
 	pb "gopkg.in/cheggaaa/pb.v1"
@@ -272,9 +271,10 @@ func ListFiles(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	vars.OrderBy = reg.ReplaceAllString(v.Get("limit"), "")
+	vars.Limit = reg.ReplaceAllString(v.Get("limit"), "")
 
-	if vars.Limit == "" || len(vars.Limit) > 3 {
+	if vars.Limit == "" || len(vars.Limit) > 4 {
+		fmt.Println("empty or too big")
 		vars.Limit = "100"
 	}
 
@@ -302,7 +302,6 @@ func ListFiles(w http.ResponseWriter, req *http.Request) {
 		log.Fatal(err)
 	}
 	vars.Order = reg.ReplaceAllString(v.Get("order"), "")
-	spew.Dump(vars)
 	if vars.Order == "asc" {
 		vars.Order = "asc"
 	} else {
@@ -349,7 +348,6 @@ func ListFiles(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	spew.Dump(v.Get("filemime"))
 	fmime, err := url.QueryUnescape(v.Get("filemime"))
 	if err != nil {
 		log.Fatal(err)
@@ -370,8 +368,6 @@ func ListFiles(w http.ResponseWriter, req *http.Request) {
 	}
 
 	sql := fmt.Sprintf("SELECT id, name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime, filehash, modified FROM files%s ORDER BY %s %s LIMIT %s", extraSQL, vars.OrderBy, vars.Order, vars.Limit)
-
-	fmt.Println(sql)
 
 	var files Files
 

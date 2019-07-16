@@ -291,9 +291,11 @@ Copyright (c) Nicolas Gallagher and Jonathan Neal
       <fieldset>
           <legend>Filter results</legend>
           
-          <input type="hidden" name="limit" value="{{ .Vars.Limit }}">
           <input type="hidden" name="order_by" value="{{ .Vars.OrderBy }}">
           <input type="hidden" name="order" value="{{ .Vars.Order }}">
+          
+          <label for="limit">Limit</label>
+          <input id="limit" type="number" name="limit" value="{{ .Vars.Limit }}">
   
           <label for="filetype">Filetype</label>
           {{ $filetype := "unset" }}
