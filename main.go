@@ -274,7 +274,6 @@ func ListFiles(w http.ResponseWriter, req *http.Request) {
 	vars.Limit = reg.ReplaceAllString(v.Get("limit"), "")
 
 	if vars.Limit == "" || len(vars.Limit) > 4 {
-		fmt.Println("empty or too big")
 		vars.Limit = "100"
 	}
 
