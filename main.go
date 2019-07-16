@@ -3,15 +3,21 @@ package main
 import (
 	"database/sql"
 	"fmt"
+	"html/template"
 	"io"
 	"log"
 	"net"
+	"net/http"
+	"net/url"
 	"os"
+	"regexp"
 	"strconv"
 	"strings"
 
+	"github.com/davecgh/go-spew/spew"
+	"github.com/gorilla/mux"
 	_ "github.com/mattn/go-sqlite3"
-	"gopkg.in/cheggaaa/pb.v1"
+	pb "gopkg.in/cheggaaa/pb.v1"
 )
 
 const (
@@ -26,6 +32,7 @@ var (
 	stmt      *sql.Stmt
 	res       sql.Result
 	fileCount int = 0
+	tmpl      *template.Template
 )
 
 type (
@@ -34,6 +41,7 @@ type (
 		Name             string `json:"name,omitempty"`
 		Path             string `json:"path,omitempty"`
 		Size             int64  `json:"size"`
+		HumanSize        string
 		IsDir            int    `json:"isdir"`
 		Machine          string `json:"machine"`
 		IP               string `json:"ip"`
@@ -45,6 +53,28 @@ type (
 		Modified         string `json:"modified"`
 	}
 	Files []File
+
+	PageData struct {
+		PageTitle    string
+		Files        Files
+		TotalResults int
+		Limit        string
+		Asc          bool
+		Filetypes    []string
+		Machines     []string
+		FileMimes    []string
+		Vars         Vars
+		FilterParts  []string
+	}
+
+	Vars struct {
+		Limit    string
+		OrderBy  string
+		Order    string
+		Filetype string
+		Machine  string
+		Filemime string
+	}
 )
 
 func init() {
@@ -79,9 +109,16 @@ func init() {
 		return
 	}
 
+	tmpl = template.Must(template.ParseFiles("templates/index.html"))
 }
 
 func main() {
+	go func() {
+		r := mux.NewRouter()
+		r.HandleFunc("/", ListFiles)
+
+		http.ListenAndServe(":1980", r)
+	}()
 	server, err := net.Listen("tcp", fmt.Sprintf(":%d", SERVER_PORT))
 	if err != nil {
 		log.Println("error listetning: ", err)
@@ -161,7 +198,7 @@ func addFile(filename string) (err error) {
 		return err
 	}
 
-	rows, err := tempDB.Query("select name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime, filehash, modified from files")
+	rows, err := tempDB.Query("SELECT name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime, filehash, modified FROM files")
 	if err != nil {
 		return err
 	}
@@ -193,7 +230,7 @@ func addFile(filename string) (err error) {
 	for _, v := range files {
 		bar.Increment()
 
-		stmt, err = tx.Prepare("INSERT OR IGNORE INTO files(name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime, filehash, modified) values(?,?,?,?,?,?,?,?,?,?,?,?)")
+		stmt, err = tx.Prepare("INSERT OR IGNORE INTO files(name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime, filehash, modified) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)")
 
 		if err != nil {
 			return err
@@ -222,29 +259,240 @@ func deleteTemporaryFile(filename string) (err error) {
 	return
 }
 
-// func ListFiles(w http.ResponseWriter, req *http.Request) {
-// 	var files Files
+func ListFiles(w http.ResponseWriter, req *http.Request) {
+	v := req.URL.Query()
+	vars := Vars{}
 
-// 	rows, err := db.Query("select id, name, path, size, isdir, machine, ip from files")
-// 	if err != nil {
-// 		log.Println("ERROR", err)
-// 	}
-// 	defer rows.Close()
-// 	for rows.Next() {
-// 		var file File
-// 		err = rows.Scan(&file.ID, &file.Name, &file.Path, &file.Size, &file.IsDir, &file.Machine, &file.IP)
-// 		if err != nil {
-// 			log.Println(err)
-// 		}
-// 		files = append(files, file)
-// 	}
-// 	err = rows.Err()
-// 	if err != nil {
-// 		log.Println(err)
-// 	}
+	var extraSQLSlice []string
+	var extraSQL string
+	var filterParts []string
 
-// 	json.NewEncoder(w).Encode(&files)
-// }
+	// get Limit
+	reg, err := regexp.Compile("[^0-9]+")
+	if err != nil {
+		log.Fatal(err)
+	}
+	vars.OrderBy = reg.ReplaceAllString(v.Get("limit"), "")
+
+	if vars.Limit == "" || len(vars.Limit) > 3 {
+		vars.Limit = "100"
+	}
+
+	filterParts = append(filterParts, fmt.Sprintf("limit: %s", vars.Limit))
+
+	// -- limit end
+
+	// get order_by
+	reg, err = regexp.Compile("[^a-zA-Z]+")
+	if err != nil {
+		log.Fatal(err)
+	}
+	vars.OrderBy = reg.ReplaceAllString(v.Get("order_by"), "")
+
+	if vars.OrderBy == "" {
+		vars.OrderBy = "name"
+	}
+	filterParts = append(filterParts, fmt.Sprintf("ordering by: %s", vars.OrderBy))
+
+	// -- order_by end
+
+	// get order
+	reg, err = regexp.Compile("[^a-zA-Z]+")
+	if err != nil {
+		log.Fatal(err)
+	}
+	vars.Order = reg.ReplaceAllString(v.Get("order"), "")
+	spew.Dump(vars)
+	if vars.Order == "asc" {
+		vars.Order = "asc"
+	} else {
+		vars.Order = "desc"
+	}
+	filterParts = append(filterParts, fmt.Sprintf("order: %s", vars.Order))
+
+	// -- order end
+
+	// get filetype
+	reg, err = regexp.Compile("[^a-zA-Z]+")
+	if err != nil {
+		log.Fatal(err)
+	}
+	vars.Filetype = reg.ReplaceAllString(v.Get("filetype"), "")
+
+	if vars.Filetype != "" && vars.Filetype != "*" {
+		extraSQLSlice = append(extraSQLSlice, fmt.Sprintf("filetype=\"%s\"", vars.Filetype))
+		filterParts = append(filterParts, fmt.Sprintf("filetype: %s", vars.Filetype))
+	}
+
+	// -- filetype end
+
+	// -- machines end
+
+	// get machines
+	reg, err = regexp.Compile("[^a-zA-Z]+")
+	if err != nil {
+		log.Fatal(err)
+	}
+	vars.Machine = reg.ReplaceAllString(v.Get("machine"), "")
+
+	if vars.Machine != "" && vars.Machine != "*" {
+		extraSQLSlice = append(extraSQLSlice, fmt.Sprintf("machine=\"%s\"", vars.Machine))
+		filterParts = append(filterParts, fmt.Sprintf("machine: %s", vars.Machine))
+	}
+
+	// -- machines end
+
+	// -- filemimes end
+
+	// get Filemime
+	reg, err = regexp.Compile("[^a-zA-Z0-9/;\\-=_ ]+")
+	if err != nil {
+		log.Fatal(err)
+	}
+	spew.Dump(v.Get("filemime"))
+	fmime, err := url.QueryUnescape(v.Get("filemime"))
+	if err != nil {
+		log.Fatal(err)
+	}
+	vars.Filemime = reg.ReplaceAllString(fmime, "")
+
+	if vars.Filemime != "" && vars.Filemime != "*" {
+		extraSQLSlice = append(extraSQLSlice, fmt.Sprintf("filemime=\"%s\"", vars.Filemime))
+		filterParts = append(filterParts, fmt.Sprintf("filemime: %s", vars.Filemime))
+	}
+
+	// -- filemimes end
+
+	// building sql -addition
+
+	if len(extraSQLSlice) > 0 {
+		extraSQL = fmt.Sprintf(" WHERE %s", strings.Join(extraSQLSlice, " AND "))
+	}
+
+	sql := fmt.Sprintf("SELECT id, name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime, filehash, modified FROM files%s ORDER BY %s %s LIMIT %s", extraSQL, vars.OrderBy, vars.Order, vars.Limit)
+
+	fmt.Println(sql)
+
+	var files Files
+
+	rows, err := db.Query(sql)
+	if err != nil {
+		log.Println("ERROR", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var file File
+		err = rows.Scan(&file.ID, &file.Name, &file.Path, &file.Size, &file.IsDir, &file.Machine, &file.IP, &file.OnExternalSource, &file.ExternalName, &file.FileType, &file.FileMIME, &file.FileHash, &file.Modified)
+		if err != nil {
+			log.Println(err)
+		}
+		file.HumanSize = ByteCountDecimal(file.Size)
+		files = append(files, file)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		log.Println(err)
+	}
+
+	var asc bool
+	if vars.Order == "asc" {
+		asc = true
+	}
+
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+
+	data := PageData{
+		PageTitle:    "GOFI Server",
+		Files:        files,
+		TotalResults: len(files),
+		Limit:        vars.Limit,
+		Asc:          asc,
+		Filetypes:    filetypes(),
+		Machines:     machines(),
+		FileMimes:    filemimes(),
+		Vars:         vars,
+		FilterParts:  filterParts,
+	}
+	tmpl.Execute(w, data)
+}
+
+func filemimes() (filemimes []string) {
+	sql := "SELECT DISTINCT filemime FROM files order by filemime asc"
+
+	rows, err := db.Query(sql)
+	if err != nil {
+		log.Println("ERROR", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var filemime string
+		err = rows.Scan(&filemime)
+		if err != nil {
+			log.Println(err)
+		}
+		filemimes = append(filemimes, filemime)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		log.Println(err)
+	}
+	return filemimes
+}
+
+func filetypes() (filetypes []string) {
+	sql := "SELECT DISTINCT filetype FROM files order by filetype asc"
+
+	rows, err := db.Query(sql)
+	if err != nil {
+		log.Println("ERROR", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var filetype string
+		err = rows.Scan(&filetype)
+		if err != nil {
+			log.Println(err)
+		}
+		filetypes = append(filetypes, filetype)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		log.Println(err)
+	}
+	return filetypes
+}
+
+func machines() (machines []string) {
+	sql := "SELECT DISTINCT machine FROM files order by machine asc"
+
+	rows, err := db.Query(sql)
+	if err != nil {
+		log.Println("ERROR", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var machine string
+		err = rows.Scan(&machine)
+		if err != nil {
+			log.Println(err)
+		}
+		machines = append(machines, machine)
+	}
+
+	err = rows.Err()
+	if err != nil {
+		log.Println(err)
+	}
+	return machines
+}
+
+func IsNumeric(s string) bool {
+	_, err := strconv.ParseFloat(s, 64)
+	return err == nil
+}
 
 func ByteCountSI(b int64) string {
 	const unit = 1000
@@ -258,4 +506,17 @@ func ByteCountSI(b int64) string {
 	}
 	return fmt.Sprintf("%.1f %cB",
 		float64(b)/float64(div), "kMGTPE"[exp])
+}
+
+func ByteCountDecimal(b int64) string {
+	const unit = 1000
+	if b < unit {
+		return fmt.Sprintf("%d B", b)
+	}
+	div, exp := int64(unit), 0
+	for n := b / unit; n >= unit; n /= unit {
+		div *= unit
+		exp++
+	}
+	return fmt.Sprintf("%.1f %cB", float64(b)/float64(div), "kMGTPE"[exp])
 }
