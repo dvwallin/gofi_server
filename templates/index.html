@@ -317,20 +317,21 @@ Copyright (c) Nicolas Gallagher and Jonathan Neal
     <table class="pure-table">
       <thead>
         <tr>
-          <th><a href="?limit={{ .Limit }}&order_by=name&order={{ if .Asc }}desc{{else}}asc{{end}}">Name</a></th>
-          <th><a href="?limit={{ .Limit }}&order_by=path&order={{ if .Asc }}desc{{else}}asc{{end}}">Path</a></th>
-          <th><a href="?limit={{ .Limit }}&order_by=size&order={{ if .Asc }}desc{{else}}asc{{end}}">Size</a></th>
-          <th><a href="?limit={{ .Limit }}&order_by=machine&order={{ if .Asc }}desc{{else}}asc{{end}}">Machine</a></th>
-          <th><a href="?limit={{ .Limit }}&order_by=ip&order={{ if .Asc }}desc{{else}}asc{{end}}">IP</a></th>
-          <th><a href="?limit={{ .Limit }}&order_by=externalname&order={{ if .Asc }}desc{{else}}asc{{end}}">External Name</a></th>
-          <th><a href="?limit={{ .Limit }}&order_by=filetype&order={{ if .Asc }}desc{{else}}asc{{end}}">Filetype</a></th>
-          <th><a href="?limit={{ .Limit }}&order_by=filemime&order={{ if .Asc }}desc{{else}}asc{{end}}">FileMIME</a></th>
-          <th><a href="?limit={{ .Limit }}&order_by=modified&order={{ if .Asc }}desc{{else}}asc{{end}}">Modified</a></th>
+          <th><a href="?limit={{ .Vars.Limit }}&order_by=name&order={{ if .Asc }}desc{{else}}asc{{end}}">Name</a></th>
+          <th><a href="?limit={{ .Vars.Limit }}&order_by=path&order={{ if .Asc }}desc{{else}}asc{{end}}">Path</a></th>
+          <th><a href="?limit={{ .Vars.Limit }}&order_by=size&order={{ if .Asc }}desc{{else}}asc{{end}}">Size</a></th>
+          <th><a href="?limit={{ .Vars.Limit }}&order_by=machine&order={{ if .Asc }}desc{{else}}asc{{end}}">Machine</a></th>
+          <th><a href="?limit={{ .Vars.Limit }}&order_by=ip&order={{ if .Asc }}desc{{else}}asc{{end}}">IP</a></th>
+          <th><a href="?limit={{ .Vars.Limit }}&order_by=externalname&order={{ if .Asc }}desc{{else}}asc{{end}}">External Name</a></th>
+          <th><a href="?limit={{ .Vars.Limit }}&order_by=filetype&order={{ if .Asc }}desc{{else}}asc{{end}}">Filetype</a></th>
+          <th><a href="?limit={{ .Vars.Limit }}&order_by=filemime&order={{ if .Asc }}desc{{else}}asc{{end}}">FileMIME</a></th>
+          <th><a href="?limit={{ .Vars.Limit }}&order_by=modified&order={{ if .Asc }}desc{{else}}asc{{end}}">Modified</a></th>
         </tr>
       </thead>
     
       <tbody>
         {{$odd := 1}}
+        {{$num := 1}}
         {{range .Files}}
           <tr class="{{ if eq $odd 1}}pure-table-odd{{$odd = 0}}{{else}}{{$odd = 1}}{{end}}">
             <td>{{ .Name }}</td>

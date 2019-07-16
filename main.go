@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"flag"
 	"fmt"
 	"html/template"
 	"io"
@@ -32,6 +33,7 @@ var (
 	res       sql.Result
 	fileCount int = 0
 	tmpl      *template.Template
+	maxLimit  *int = flag.Int("maxlimit", 5000, "maximum number of files to select at once")
 )
 
 type (
@@ -57,7 +59,6 @@ type (
 		PageTitle    string
 		Files        Files
 		TotalResults int
-		Limit        string
 		Asc          bool
 		Filetypes    []string
 		Machines     []string
@@ -67,7 +68,7 @@ type (
 	}
 
 	Vars struct {
-		Limit    string
+		Limit    int64
 		OrderBy  string
 		Order    string
 		Filetype string
@@ -77,6 +78,7 @@ type (
 )
 
 func init() {
+	flag.Parse()
 
 	// Connect to the database
 	db, err = sql.Open("sqlite3", fmt.Sprintf("./%s", GOFI_DATABASE_NAME))
@@ -271,13 +273,18 @@ func ListFiles(w http.ResponseWriter, req *http.Request) {
 	if err != nil {
 		log.Fatal(err)
 	}
-	vars.Limit = reg.ReplaceAllString(v.Get("limit"), "")
+	limitString := reg.ReplaceAllString(v.Get("limit"), "")
 
-	if vars.Limit == "" || len(vars.Limit) > 4 {
-		vars.Limit = "100"
+	vars.Limit, err = strconv.ParseInt(limitString, 10, 64)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	filterParts = append(filterParts, fmt.Sprintf("limit: %s", vars.Limit))
+	if vars.Limit < 1 || vars.Limit > int64(*maxLimit) {
+		vars.Limit = 100
+	}
+
+	filterParts = append(filterParts, fmt.Sprintf("limit: %d", vars.Limit))
 
 	// -- limit end
 
@@ -366,7 +373,7 @@ func ListFiles(w http.ResponseWriter, req *http.Request) {
 		extraSQL = fmt.Sprintf(" WHERE %s", strings.Join(extraSQLSlice, " AND "))
 	}
 
-	sql := fmt.Sprintf("SELECT id, name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime, filehash, modified FROM files%s ORDER BY %s %s LIMIT %s", extraSQL, vars.OrderBy, vars.Order, vars.Limit)
+	sql := fmt.Sprintf("SELECT id, name, path, size, isdir, machine, ip, onexternalsource, externalname, filetype, filemime, filehash, modified FROM files%s ORDER BY %s %s LIMIT %d", extraSQL, vars.OrderBy, vars.Order, vars.Limit)
 
 	var files Files
 
@@ -401,7 +408,6 @@ func ListFiles(w http.ResponseWriter, req *http.Request) {
 		PageTitle:    "GOFI Server",
 		Files:        files,
 		TotalResults: len(files),
-		Limit:        vars.Limit,
 		Asc:          asc,
 		Filetypes:    filetypes(),
 		Machines:     machines(),
